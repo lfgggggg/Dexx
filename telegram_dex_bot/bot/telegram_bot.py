@@ -905,13 +905,41 @@ Choose your trading action:"""
                 await loading_msg.edit_text(token_text, reply_markup=keyboard, parse_mode="Markdown")
                 
             else:
-                await loading_msg.edit_text(
-                    f"❌ **Could not fetch token info**\n\n"
-                    f"Error: {quote_result.get('error', 'Unknown error')}\n\n"
-                    f"Token: `{token_address}`\n\n"
-                    f"Try checking if this is a valid token address on Monad.",
-                    parse_mode="Markdown"
-                )
+                # Handle different error types
+                error_type = quote_result.get('error_type', 'unknown')
+                
+                if error_type == 'not_nadfun_token':
+                    error_text = f"""❌ **Token Not Available on Nad.fun**
+
+📍 **Address:** `{token_address}`
+
+🔍 **This token is not available on Nad.fun DEX**
+
+The token you provided appears to be a regular ERC20 token or was not launched through Nad.fun platform.
+
+**What you can try:**
+• Visit [nad.fun](https://nad.fun) to find tokens launched on the platform
+• Look for tokens in the "Terminal" section of Nad.fun
+• Try tokens that were created through Nad.fun's memecoin launcher
+
+**Need help?** Use `/help` for more information."""
+                else:
+                    error_text = f"""❌ **Could not fetch token info**
+
+📍 **Address:** `{token_address}`
+⚠️ **Error:** {quote_result.get('error', 'Unknown error')}
+
+**Possible issues:**
+• Token may not exist on Monad Testnet
+• Token may not be tradeable on Nad.fun
+• Network connectivity issues
+
+**Try:**
+• Double-check the token address
+• Visit [nad.fun](https://nad.fun) to find valid tokens
+• Use `/help` for more commands"""
+                
+                await loading_msg.edit_text(error_text, parse_mode="Markdown")
                 
         except Exception as e:
             await loading_msg.edit_text(
