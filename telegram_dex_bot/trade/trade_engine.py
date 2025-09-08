@@ -34,23 +34,36 @@ class TradeEngine:
             dummy_private_key = "0x" + "1" * 64
             trade = Trade(self.rpc_url, dummy_private_key)
             
-            # Get quote
-            quote = await trade.get_amount_out(token_address, amount_in, is_buy=is_buy)
-            
-            return {
-                'token_address': token_address,
-                'amount_in': str(amount_in),
-                'amount_out': str(quote.amount),
-                'router': quote.router,
-                'is_buy': is_buy,
-                'success': True
-            }
-            
+            # Try to get quote - handle bonding curve vs DEX routing
+            try:
+                quote = await trade.get_amount_out(token_address, amount_in, is_buy=is_buy)
+                
+                return {
+                    'token_address': token_address,
+                    'amount_in': str(amount_in),
+                    'amount_out': str(quote.amount),
+                    'router': quote.router,
+                    'is_buy': is_buy,
+                    'success': True
+                }
+            except Exception as quote_error:
+                # If bonding curve fails, this might be a regular ERC20 token
+                if "BONDING_CURVE" in str(quote_error) or "INVALID_INPUTS" in str(quote_error):
+                    return {
+                        'success': False,
+                        'error': 'This token may not be available on Nad.fun bonding curve. Try using a token that was launched on Nad.fun platform.',
+                        'token_address': token_address,
+                        'error_type': 'not_nadfun_token'
+                    }
+                else:
+                    raise quote_error
+                    
         except Exception as e:
             logger.error(f"Failed to get token price for {token_address}: {e}")
             return {
                 'success': False,
-                'error': str(e)
+                'error': str(e),
+                'token_address': token_address
             }
     
     async def execute_buy_trade(self, private_key: str, token_address: str, 

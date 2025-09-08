@@ -116,10 +116,20 @@ class DatabaseManager:
         """Create a new user record"""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("""
-                    INSERT OR REPLACE INTO users (user_id, username, first_name, last_name)
-                    VALUES (?, ?, ?, ?)
-                """, (user_id, username, first_name, last_name))
+                # Check if user exists first
+                existing_user = await self.get_user(user_id)
+                if existing_user:
+                    # User exists, just update basic info, keep default_wallet_id
+                    await db.execute("""
+                        UPDATE users SET username = ?, first_name = ?, last_name = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ?
+                    """, (username, first_name, last_name, user_id))
+                else:
+                    # New user, insert fresh record
+                    await db.execute("""
+                        INSERT INTO users (user_id, username, first_name, last_name)
+                        VALUES (?, ?, ?, ?)
+                    """, (user_id, username, first_name, last_name))
                 await db.commit()
                 return True
         except Exception as e:
@@ -148,11 +158,12 @@ class DatabaseManager:
                 """, (user_id, wallet_name, address, encrypted_private_key))
                 wallet_id = cursor.lastrowid
                 
-                # Set as default wallet if user has no default
+                # Always set as default wallet if user has no default
                 user = await self.get_user(user_id)
                 if user and not user.get('default_wallet_id'):
-                    await db.execute("UPDATE users SET default_wallet_id = ? WHERE user_id = ?", 
+                    await db.execute("UPDATE users SET default_wallet_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", 
                                    (wallet_id, user_id))
+                    logger.info(f"Set wallet {wallet_id} as default for user {user_id}")
                 
                 await db.commit()
                 return wallet_id
