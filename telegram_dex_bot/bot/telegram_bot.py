@@ -77,12 +77,17 @@ class TelegramDEXBot:
         self.router.message(WalletStates.waiting_for_new_password)(self.process_new_password)
         self.router.message(WalletStates.waiting_for_password_confirmation)(self.process_password_confirmation)
         
+        # Auto-detect contract addresses
+        self.router.message(F.text.regexp(r'^0x[a-fA-F0-9]{40}$'))(self.handle_contract_address)
+        
         # Callback handlers
         self.router.callback_query(F.data.startswith('wallet_'))(self.handle_wallet_callback)
         self.router.callback_query(F.data.startswith('switch_to_'))(self.handle_switch_callback)
         self.router.callback_query(F.data.startswith('set_slippage_'))(self.handle_slippage_callback)
         self.router.callback_query(F.data.startswith('refresh_'))(self.handle_refresh_callback)
         self.router.callback_query(F.data.startswith('trade_'))(self.handle_trade_callback)
+        self.router.callback_query(F.data.startswith('buy_'))(self.handle_buy_callback)
+        self.router.callback_query(F.data.startswith('sell_'))(self.handle_sell_callback)
     
     async def cmd_start(self, message: Message, state: FSMContext):
         """Handle /start command"""
@@ -96,32 +101,47 @@ class TelegramDEXBot:
         # Create user record
         await self.db_manager.create_user(user_id, username, first_name, last_name)
         
-        welcome_text = f"""🚀 **Welcome to DEX Trading Bot!**
+        # Check if user has wallets
+        wallets = await self.db_manager.get_user_wallets(user_id)
         
-Hi {first_name}! I'm your personal trading assistant for Nad.fun DEX on Monad.
+        if wallets:
+            # User has wallets, show main menu
+            welcome_text = f"""🚀 **Welcome back, {first_name}!**
+
+💼 **Your Wallets:** {len(wallets)} wallet(s)
+🌐 **Network:** Monad Testnet
+📊 **Ready for trading on Nad.fun DEX**
+
+Choose an action below or send a token address to get started:"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💰 Balance", callback_data="check_balance"), 
+                 InlineKeyboardButton(text="📊 Trade", callback_data="trading_menu")],
+                [InlineKeyboardButton(text="📜 History", callback_data="refresh_history"), 
+                 InlineKeyboardButton(text="💼 Wallets", callback_data="wallet_list")],
+                [InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"), 
+                 InlineKeyboardButton(text="❓ Help", callback_data="show_help")]
+            ])
+        else:
+            # New user, show welcome
+            welcome_text = f"""🚀 **Welcome to Monad DEX Bot!**
+        
+Hi {first_name}! I'm your trading assistant for Nad.fun DEX on Monad.
 
 **What I can do:**
-🔹 Create and manage wallets securely
-🔹 Buy and sell tokens instantly
+🔹 Create secure encrypted wallets
+🔹 Buy and sell tokens instantly  
 🔹 Get real-time price quotes
 🔹 Track your trading history
-🔹 Set custom slippage and risk management
+🔹 Auto-detect token addresses
 
-**Get started:**
-• `/wallet` - Manage your wallets
-• `/price <token>` - Get token price
-• `/buy <token> <amount>` - Buy tokens
-• `/sell <token> <amount>` - Sell tokens
-
-**Security:** Your private keys are encrypted and stored securely. I never have access to your funds.
-
-Type `/help` for detailed commands."""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🆕 Create Wallet", callback_data="wallet_create")],
-            [InlineKeyboardButton(text="📥 Import Wallet", callback_data="wallet_import")],
-            [InlineKeyboardButton(text="📊 View Wallets", callback_data="wallet_list")]
-        ])
+**Get started by creating your first wallet:**"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🆕 Create New Wallet", callback_data="wallet_create")],
+                [InlineKeyboardButton(text="📥 Import Existing Wallet", callback_data="wallet_import")],
+                [InlineKeyboardButton(text="❓ How it Works", callback_data="show_help")]
+            ])
         
         await message.reply(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
     
@@ -232,7 +252,7 @@ Need help? Just type your question!"""
 💼 **Wallet:** {wallet_result['wallet_name']}
 📍 **Address:** `{wallet_result['address']}`
 
-⚠️ **Important:** Your wallet has been encrypted and stored securely. Make sure to fund it with some ETH for gas fees before trading.
+⚠️ **Important:** Your wallet has been encrypted and stored securely. Make sure to fund it with some MON for gas fees before trading.
 
 Use `/balance` to check your wallet balance.""",
                 parse_mode="Markdown"
@@ -810,6 +830,141 @@ Choose your trading action:"""
         
         await callback.answer()
     
+    async def handle_contract_address(self, message: Message):
+        """Handle auto-detected contract addresses"""
+        token_address = message.text.strip()
+        user_id = message.from_user.id
+        
+        # Check if user has an active wallet
+        user = await self.db_manager.get_user(user_id)
+        if not user or not user.get('default_wallet_id'):
+            await message.reply(
+                "❌ **No active wallet found**\n\n"
+                "Create a wallet first to interact with tokens:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🆕 Create Wallet", callback_data="wallet_create")]
+                ]),
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Show loading message
+        loading_msg = await message.reply("🔍 **Analyzing token...**")
+        
+        try:
+            # Get token price quote
+            quote_result = await self.trade_engine.get_token_price(token_address, 10**18, is_buy=True)
+            
+            if quote_result['success']:
+                # Format the token display
+                token_text = f"""🪙 **Token Detected**
+
+📍 **Address:** `{token_address}`
+💱 **Router:** {quote_result.get('router', 'Unknown')}
+📊 **1 MON = ~{self.trade_engine.format_amount(int(quote_result['amount_out']))} tokens**
+
+💰 **Quick Buy Actions:**"""
+                
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="💰 Buy 0.1 MON", callback_data=f"buy_{token_address}_0.1"),
+                        InlineKeyboardButton(text="💰 Buy 0.5 MON", callback_data=f"buy_{token_address}_0.5")
+                    ],
+                    [
+                        InlineKeyboardButton(text="💰 Buy 1 MON", callback_data=f"buy_{token_address}_1"),
+                        InlineKeyboardButton(text="💰 Buy 5 MON", callback_data=f"buy_{token_address}_5")
+                    ],
+                    [
+                        InlineKeyboardButton(text="📊 Custom Amount", callback_data=f"buy_custom_{token_address}"),
+                        InlineKeyboardButton(text="📉 Sell Tokens", callback_data=f"sell_custom_{token_address}")
+                    ]
+                ])
+                
+                await loading_msg.edit_text(token_text, reply_markup=keyboard, parse_mode="Markdown")
+                
+            else:
+                await loading_msg.edit_text(
+                    f"❌ **Could not fetch token info**\n\n"
+                    f"Error: {quote_result.get('error', 'Unknown error')}\n\n"
+                    f"Token: `{token_address}`\n\n"
+                    f"Try checking if this is a valid token address on Monad.",
+                    parse_mode="Markdown"
+                )
+                
+        except Exception as e:
+            await loading_msg.edit_text(
+                f"❌ **Error analyzing token**\n\n"
+                f"Address: `{token_address}`\n\n"
+                f"Please try again or use manual commands.",
+                parse_mode="Markdown"
+            )
+    
+    async def handle_buy_callback(self, callback: CallbackQuery):
+        """Handle buy button callbacks"""
+        data = callback.data.split('_')
+        
+        if len(data) >= 3:
+            token_address = data[1] 
+            amount = data[2]
+            
+            # Execute buy with the specified amount
+            user_id = callback.from_user.id
+            user = await self.db_manager.get_user(user_id)
+            
+            if not user or not user.get('default_wallet_id'):
+                await callback.message.edit_text("❌ No active wallet found.")
+                await callback.answer()
+                return
+            
+            wallet = await self.db_manager.get_wallet(user['default_wallet_id'])
+            if not wallet:
+                await callback.message.edit_text("❌ Active wallet not found.")
+                await callback.answer()
+                return
+            
+            # Execute the buy immediately
+            await callback.message.edit_text("📊 **Executing buy order...**")
+            
+            try:
+                private_key = self.wallet_manager.decrypt_private_key(wallet['encrypted_private_key'])
+                
+                # Execute buy trade
+                result = await self.trade_engine.execute_buy_trade(
+                    private_key, token_address, amount, slippage=5.0
+                )
+                
+                if result['success']:
+                    success_text = f"""✅ **Buy Order Executed!**
+
+💰 **Spent:** {result['amount_in']} MON
+📈 **Expected Tokens:** ~{self.trade_engine.format_amount(int(result['expected_out']))}
+🔗 **Transaction:** `{result['tx_hash']}`
+⚙️ **Router:** {result['router']}
+📊 **Slippage:** {result['slippage']}%
+
+⏳ **Waiting for confirmation...**"""
+                    
+                    await callback.message.edit_text(success_text, parse_mode="Markdown")
+                    
+                    # Record transaction
+                    await self.db_manager.record_transaction(
+                        wallet['wallet_id'], 'buy', token_address, 
+                        result['amount_in'], result['expected_out'], result['tx_hash']
+                    )
+                    
+                else:
+                    await callback.message.edit_text(f"❌ **Buy failed:** {result['error']}")
+                    
+            except Exception as e:
+                await callback.message.edit_text("❌ Error executing buy order. Please try again.")
+        
+        await callback.answer()
+    
+    async def handle_sell_callback(self, callback: CallbackQuery):
+        """Handle sell button callbacks"""
+        await callback.message.edit_text("📉 **Sell tokens feature in development!**")
+        await callback.answer()
+
     async def start(self):
         """Start the bot"""
         try:
