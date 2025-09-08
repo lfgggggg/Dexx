@@ -1,0 +1,18 @@
+# Development and example dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Code formatting
+black>=23.0.0
+
+# Type checking
+mypy>=1.0.0
+
+# Environment variables for examples
+python-dotenv>=1.0.0
+
+# Install the SDK itself in editable mode
+-e .
