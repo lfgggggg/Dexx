@@ -10,12 +10,7 @@ from web3 import Web3
 from eth_account import Account
 
 # Import Nad.fun SDK
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../nadfun-sdk-python/src'))
-
 from nadfun_sdk import Trade, Token
-from nadfun_sdk.types import TradeResult
 
 logger = logging.getLogger(__name__)
 

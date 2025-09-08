@@ -1,3 +1,26 @@
 modules = ["python-3.11"]
 [agent]
 expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram DEX Bot"
+
+[[workflows.workflow]]
+name = "Telegram DEX Bot"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd telegram_dex_bot && python main.py"
+
+[workflows.workflow.metadata]
+outputType = "console"

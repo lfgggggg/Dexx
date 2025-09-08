@@ -84,7 +84,7 @@ class TelegramDEXBot:
         # Create user record
         await self.db_manager.create_user(user_id, username, first_name, last_name)
         
-        welcome_text = f\"\"\"🚀 **Welcome to DEX Trading Bot!**
+        welcome_text = f"""🚀 **Welcome to DEX Trading Bot!**
         
 Hi {first_name}! I'm your personal trading assistant for Nad.fun DEX.
 
@@ -103,7 +103,7 @@ Hi {first_name}! I'm your personal trading assistant for Nad.fun DEX.
 
 **Security:** Your private keys are encrypted and stored securely. I never have access to your funds.
 
-Type `/help` for detailed commands.\"\"\"
+Type `/help` for detailed commands."""
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🆕 Create Wallet", callback_data="wallet_create")],
@@ -115,7 +115,7 @@ Type `/help` for detailed commands.\"\"\"
     
     async def cmd_help(self, message: Message):
         """Handle /help command"""
-        help_text = \"\"\"📚 **Bot Commands Help**
+        help_text = """📚 **Bot Commands Help**
 
 **Wallet Management:**
 • `/wallet` - View and manage wallets
@@ -143,7 +143,7 @@ Type `/help` for detailed commands.\"\"\"
 🔐 Never share your private keys with anyone
 🔐 Always verify contract addresses before trading
 
-Need help? Just type your question!\"\"\"
+Need help? Just type your question!"""
         
         await message.reply(help_text, parse_mode="Markdown")
     
@@ -159,19 +159,19 @@ Need help? Just type your question!\"\"\"
             ])
             
             await message.reply(
-                "💼 **No wallets found**\\n\\nCreate your first wallet to start trading!",
+                "💼 **No wallets found**\n\nCreate your first wallet to start trading!",
                 reply_markup=keyboard,
                 parse_mode="Markdown"
             )
             return
         
-        wallet_text = "💼 **Your Wallets:**\\n\\n"
+        wallet_text = "💼 **Your Wallets:**\n\n"
         keyboard_buttons = []
         
         for i, wallet in enumerate(wallets):
-            wallet_text += f"{i+1}. **{wallet['wallet_name']}**\\n"
-            wallet_text += f"   `{wallet['address'][:10]}...{wallet['address'][-8:]}`\\n"
-            wallet_text += f"   Created: {wallet['created_at'][:10]}\\n\\n"
+            wallet_text += f"{i+1}. **{wallet['wallet_name']}**\n"
+            wallet_text += f"   `{wallet['address'][:10]}...{wallet['address'][-8:]}`\n"
+            wallet_text += f"   Created: {wallet['created_at'][:10]}\n\n"
             
             keyboard_buttons.append([
                 InlineKeyboardButton(
@@ -209,14 +209,14 @@ Need help? Just type your question!\"\"\"
         
         if wallet_id:
             await message.reply(
-                f\"\"\"✅ **Wallet Created Successfully!**
+                f"""✅ **Wallet Created Successfully!**
 
 💼 **Wallet:** {wallet_result['wallet_name']}
 📍 **Address:** `{wallet_result['address']}`
 
 ⚠️ **Important:** Your wallet has been encrypted and stored securely. Make sure to fund it with some ETH for gas fees before trading.
 
-Use `/balance` to check your wallet balance.\"\"",
+Use `/balance` to check your wallet balance.""",
                 parse_mode="Markdown"
             )
         else:
@@ -229,7 +229,7 @@ Use `/balance` to check your wallet balance.\"\"",
             args = message.text.split()[1:] if len(message.text.split()) > 1 else []
             
             if not args:
-                await message.reply("❌ Please provide a token address\\n\\nExample: `/price 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701`", parse_mode="Markdown")
+                await message.reply("❌ Please provide a token address\n\nExample: `/price 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701`", parse_mode="Markdown")
                 return
             
             token_address = args[0]
@@ -249,14 +249,14 @@ Use `/balance` to check your wallet balance.\"\"",
             amount_in_eth = self.trade_engine.format_amount(int(quote['amount_in']))
             amount_out = self.trade_engine.format_amount(int(quote['amount_out']))
             
-            price_text = f\"\"\"📊 **Token Price Quote**
+            price_text = f"""📊 **Token Price Quote**
 
 🔗 **Token:** `{token_address[:10]}...{token_address[-8:]}`
 💰 **Price:** {amount_in_eth} ETH = {amount_out} tokens
 
 **Trading:**
 • `/buy {token_address[:10]}... <amount>` - Buy tokens
-• `/sell {token_address[:10]}... <amount>` - Sell tokens\"\"\"
+• `/sell {token_address[:10]}... <amount>` - Sell tokens"""
             
             await message.reply(price_text, parse_mode="Markdown")
             
