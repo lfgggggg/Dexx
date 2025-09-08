@@ -753,6 +753,28 @@ Your wallet has been encrypted and stored securely.""",
             await self.cmd_import(callback.message)
         elif data == "wallet_list":
             await self.cmd_wallet(callback.message)
+        elif data == "check_balance":
+            await self.cmd_balance(callback.message)
+        elif data == "show_help":
+            await self.cmd_help(callback.message)
+        elif data == "settings_menu":
+            settings_text = """⚙️ **Settings & Configuration**
+
+Manage your bot preferences:"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📊 Slippage Settings", callback_data="slippage_menu"),
+                    InlineKeyboardButton(text="🔄 Switch Wallet", callback_data="switch_wallet")
+                ],
+                [
+                    InlineKeyboardButton(text="🔐 View Private Keys", callback_data="view_keys_menu"),
+                    InlineKeyboardButton(text="🔑 Change Password", callback_data="change_password_menu")
+                ],
+                [InlineKeyboardButton(text="↩️ Back to Main Menu", callback_data="main_menu")]
+            ])
+            
+            await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="Markdown")
         
         await callback.answer()
     
