@@ -56,7 +56,7 @@ class TelegramDEXBot:
         self.router.message(Command('help'))(self.cmd_help)
         self.router.message(Command('wallet'))(self.cmd_wallet)
         self.router.message(Command('new_wallet'))(self.cmd_new_wallet)
-        self.router.message(Command('import'))(self.cmd_import_wallet)
+        self.router.message(Command('import'))(self.cmd_import)
         self.router.message(Command('balance'))(self.cmd_balance)
         self.router.message(Command('buy'))(self.cmd_buy)
         self.router.message(Command('sell'))(self.cmd_sell)
@@ -86,7 +86,7 @@ class TelegramDEXBot:
         
         welcome_text = f"""🚀 **Welcome to DEX Trading Bot!**
         
-Hi {first_name}! I'm your personal trading assistant for Nad.fun DEX.
+Hi {first_name}! I'm your personal trading assistant for Nad.fun DEX on Monad.
 
 **What I can do:**
 🔹 Create and manage wallets securely
@@ -264,6 +264,30 @@ Use `/balance` to check your wallet balance.""",
             logger.error(f"Error in price command: {e}")
             await message.reply("❌ Error getting price quote")
     
+    async def cmd_import(self, message: Message):
+        """Handle /import command"""
+        await message.reply("Please send your private key (it will be encrypted and stored securely):")
+
+    async def cmd_balance(self, message: Message):
+        """Handle /balance command"""
+        await message.reply("Balance checking feature coming soon!")
+
+    async def cmd_buy(self, message: Message):
+        """Handle /buy command"""
+        await message.reply("Buy feature coming soon!")
+
+    async def cmd_sell(self, message: Message):
+        """Handle /sell command"""
+        await message.reply("Sell feature coming soon!")
+
+    async def cmd_history(self, message: Message):
+        """Handle /history command"""
+        await message.reply("History feature coming soon!")
+
+    async def cmd_slippage(self, message: Message):
+        """Handle /slippage command"""
+        await message.reply("Slippage configuration coming soon!")
+
     async def handle_wallet_callback(self, callback: CallbackQuery):
         """Handle wallet-related callback queries"""
         data = callback.data
@@ -271,8 +295,7 @@ Use `/balance` to check your wallet balance.""",
         if data == "wallet_create":
             await self.cmd_new_wallet(callback.message)
         elif data == "wallet_import":
-            await callback.message.reply("Please send your private key (it will be encrypted and stored securely):")
-            # Set state for private key input
+            await self.cmd_import(callback.message)
         elif data == "wallet_list":
             await self.cmd_wallet(callback.message)
         

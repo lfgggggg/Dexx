@@ -1,7 +1,7 @@
 # Telegram DEX Bot Project
 
 ## Overview
-A sophisticated Telegram bot for decentralized exchange (DEX) trading on Nad.fun platform. The bot enables users to trade tokens on Somnia/Monad blockchain directly through Telegram with secure wallet management and real-time trading capabilities.
+A sophisticated Telegram bot for decentralized exchange (DEX) trading on Nad.fun platform. The bot enables users to trade tokens on Monad blockchain directly through Telegram with secure wallet management and real-time trading capabilities.
 
 ## Current State
 ✅ **MVP Completed (September 8, 2025)**
