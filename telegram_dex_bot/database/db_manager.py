@@ -38,6 +38,7 @@ class DatabaseManager:
                 first_name TEXT,
                 last_name TEXT,
                 default_wallet_id INTEGER,
+                password TEXT,
                 settings TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -238,3 +239,31 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get transactions for user {user_id}: {e}")
             return []
+    
+    async def set_user_password(self, user_id: int, password: str) -> bool:
+        """Set or update user password"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                """, (password, user_id))
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to set password for user {user_id}: {e}")
+            return False
+    
+    async def set_default_wallet(self, user_id: int, wallet_id: int) -> bool:
+        """Set user's default wallet"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    UPDATE users SET default_wallet_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                """, (wallet_id, user_id))
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to set default wallet for user {user_id}: {e}")
+            return False

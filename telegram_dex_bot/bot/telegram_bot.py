@@ -23,6 +23,9 @@ class WalletStates(StatesGroup):
     """States for wallet import workflow"""
     waiting_for_private_key = State()
     waiting_for_wallet_name = State()
+    waiting_for_password = State()
+    waiting_for_new_password = State()
+    waiting_for_password_confirmation = State()
 
 class TradeStates(StatesGroup):
     """States for trading workflows"""
@@ -63,13 +66,20 @@ class TelegramDEXBot:
         self.router.message(Command('price'))(self.cmd_price)
         self.router.message(Command('history'))(self.cmd_history)
         self.router.message(Command('slippage'))(self.cmd_slippage)
+        self.router.message(Command('switch_wallet'))(self.cmd_switch_wallet)
+        self.router.message(Command('view_keys'))(self.cmd_view_keys)
+        self.router.message(Command('change_password'))(self.cmd_change_password)
         
         # State handlers
         self.router.message(WalletStates.waiting_for_private_key)(self.process_private_key)
         self.router.message(WalletStates.waiting_for_wallet_name)(self.process_wallet_name)
+        self.router.message(WalletStates.waiting_for_password)(self.process_password)
+        self.router.message(WalletStates.waiting_for_new_password)(self.process_new_password)
+        self.router.message(WalletStates.waiting_for_password_confirmation)(self.process_password_confirmation)
         
         # Callback handlers
         self.router.callback_query(F.data.startswith('wallet_'))(self.handle_wallet_callback)
+        self.router.callback_query(F.data.startswith('switch_to_'))(self.handle_switch_callback)
         self.router.callback_query(F.data.startswith('trade_'))(self.handle_trade_callback)
     
     async def cmd_start(self, message: Message, state: FSMContext):
@@ -264,9 +274,10 @@ Use `/balance` to check your wallet balance.""",
             logger.error(f"Error in price command: {e}")
             await message.reply("❌ Error getting price quote")
     
-    async def cmd_import(self, message: Message):
+    async def cmd_import(self, message: Message, state: FSMContext):
         """Handle /import command"""
-        await message.reply("Please send your private key (it will be encrypted and stored securely):")
+        await message.reply("🔐 **Import Wallet**\n\nPlease send your private key (it will be encrypted and stored securely):")
+        await state.set_state(WalletStates.waiting_for_private_key)
 
     async def cmd_balance(self, message: Message):
         """Handle /balance command"""
@@ -288,6 +299,155 @@ Use `/balance` to check your wallet balance.""",
         """Handle /slippage command"""
         await message.reply("Slippage configuration coming soon!")
 
+    async def cmd_switch_wallet(self, message: Message):
+        """Handle /switch_wallet command"""
+        user_id = message.from_user.id
+        wallets = await self.db_manager.get_user_wallets(user_id)
+        
+        if not wallets:
+            await message.reply("❌ No wallets found. Create a wallet first with /new_wallet")
+            return
+        
+        if len(wallets) == 1:
+            await message.reply("ℹ️ You only have one wallet. Create more wallets to switch between them.")
+            return
+        
+        # Create inline keyboard with wallet options
+        keyboard_buttons = []
+        for wallet in wallets:
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text=f"📱 {wallet['wallet_name']} ({wallet['address'][:10]}...)",
+                    callback_data=f"switch_to_{wallet['wallet_id']}"
+                )
+            ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        await message.reply("🔄 **Choose wallet to switch to:**", reply_markup=keyboard, parse_mode="Markdown")
+
+    async def cmd_view_keys(self, message: Message, state: FSMContext):
+        """Handle /view_keys command - requires password"""
+        await message.reply("🔐 **Enter your password to view private keys:**")
+        await state.set_state(WalletStates.waiting_for_password)
+
+    async def cmd_change_password(self, message: Message, state: FSMContext):
+        """Handle /change_password command"""
+        await message.reply("🔒 **Enter your current password:**")
+        await state.set_state(WalletStates.waiting_for_new_password)
+
+    # State processing methods
+    async def process_private_key(self, message: Message, state: FSMContext):
+        """Process private key input for wallet import"""
+        try:
+            private_key = message.text.strip()
+            
+            # Import wallet
+            wallet_result = self.wallet_manager.import_wallet_from_private_key(private_key)
+            
+            if not wallet_result['success']:
+                await message.reply(f"❌ Failed to import wallet: {wallet_result['error']}")
+                await state.clear()
+                return
+            
+            # Save to database
+            user_id = message.from_user.id
+            wallet_id = await self.db_manager.create_wallet(
+                user_id,
+                wallet_result['wallet_name'],
+                wallet_result['address'],
+                wallet_result['encrypted_private_key']
+            )
+            
+            if wallet_id:
+                await message.reply(
+                    f"""✅ **Wallet Imported Successfully!**
+
+💼 **Wallet:** {wallet_result['wallet_name']}
+📍 **Address:** `{wallet_result['address']}`
+
+Your wallet has been encrypted and stored securely.""",
+                    parse_mode="Markdown"
+                )
+            else:
+                await message.reply("❌ Failed to save wallet to database.")
+            
+            await state.clear()
+            
+        except Exception as e:
+            await message.reply("❌ Error processing private key. Please try again.")
+            await state.clear()
+
+    async def process_wallet_name(self, message: Message, state: FSMContext):
+        """Process wallet name input"""
+        # This can be used for custom wallet naming
+        await message.reply("Wallet naming feature coming soon!")
+        await state.clear()
+
+    async def process_password(self, message: Message, state: FSMContext):
+        """Process password for viewing private keys"""
+        password = message.text.strip()
+        user_id = message.from_user.id
+        
+        # Check if user has set a password (simplified - in real app use proper password hashing)
+        user = await self.db_manager.get_user(user_id)
+        stored_password = user.get('password') if user else None
+        
+        if not stored_password:
+            # First time setting password
+            await self.db_manager.set_user_password(user_id, password)
+            await message.reply("🔐 **Password set successfully!**\n\nNow showing your private keys:")
+            await self.show_private_keys(message)
+        elif stored_password == password:
+            await self.show_private_keys(message)
+        else:
+            await message.reply("❌ **Incorrect password!**")
+        
+        await state.clear()
+
+    async def process_new_password(self, message: Message, state: FSMContext):
+        """Process new password setup"""
+        await state.update_data(new_password=message.text.strip())
+        await message.reply("🔒 **Confirm your new password:**")
+        await state.set_state(WalletStates.waiting_for_password_confirmation)
+
+    async def process_password_confirmation(self, message: Message, state: FSMContext):
+        """Process password confirmation"""
+        data = await state.get_data()
+        new_password = data.get('new_password')
+        confirmation = message.text.strip()
+        
+        if new_password == confirmation:
+            user_id = message.from_user.id
+            await self.db_manager.set_user_password(user_id, new_password)
+            await message.reply("✅ **Password changed successfully!**")
+        else:
+            await message.reply("❌ **Passwords don't match. Please try again.**")
+        
+        await state.clear()
+
+    async def show_private_keys(self, message: Message):
+        """Show user's private keys (password protected)"""
+        user_id = message.from_user.id
+        wallets = await self.db_manager.get_user_wallets(user_id)
+        
+        if not wallets:
+            await message.reply("❌ No wallets found.")
+            return
+        
+        keys_text = "🔐 **Your Private Keys:**\n\n"
+        for i, wallet in enumerate(wallets):
+            try:
+                decrypted_key = self.wallet_manager.decrypt_private_key(wallet['encrypted_private_key'])
+                keys_text += f"{i+1}. **{wallet['wallet_name']}**\n"
+                keys_text += f"   Address: `{wallet['address']}`\n"
+                keys_text += f"   Private Key: `{decrypted_key}`\n\n"
+            except Exception as e:
+                keys_text += f"{i+1}. **{wallet['wallet_name']}** - ❌ Error decrypting\n\n"
+        
+        keys_text += "⚠️ **Security Warning:** Never share your private keys with anyone!"
+        
+        await message.reply(keys_text, parse_mode="Markdown")
+
     async def handle_wallet_callback(self, callback: CallbackQuery):
         """Handle wallet-related callback queries"""
         data = callback.data
@@ -301,6 +461,32 @@ Use `/balance` to check your wallet balance.""",
         
         await callback.answer()
     
+    async def handle_switch_callback(self, callback: CallbackQuery):
+        """Handle wallet switching callbacks"""
+        data = callback.data
+        wallet_id = int(data.split('_')[-1])
+        user_id = callback.from_user.id
+        
+        # Set as default wallet
+        success = await self.db_manager.set_default_wallet(user_id, wallet_id)
+        
+        if success:
+            wallet = await self.db_manager.get_wallet(wallet_id)
+            if wallet:
+                await callback.message.edit_text(
+                    f"✅ **Switched to wallet:**\n\n"
+                    f"📱 **{wallet['wallet_name']}**\n"
+                    f"📍 `{wallet['address']}`\n\n"
+                    f"This wallet is now your active trading wallet.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await callback.message.edit_text("❌ Error switching wallet.")
+        else:
+            await callback.message.edit_text("❌ Failed to switch wallet.")
+        
+        await callback.answer()
+
     async def handle_trade_callback(self, callback: CallbackQuery):
         """Handle trade-related callback queries"""
         # Implement trade callbacks
