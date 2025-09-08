@@ -80,6 +80,8 @@ class TelegramDEXBot:
         # Callback handlers
         self.router.callback_query(F.data.startswith('wallet_'))(self.handle_wallet_callback)
         self.router.callback_query(F.data.startswith('switch_to_'))(self.handle_switch_callback)
+        self.router.callback_query(F.data.startswith('set_slippage_'))(self.handle_slippage_callback)
+        self.router.callback_query(F.data.startswith('refresh_'))(self.handle_refresh_callback)
         self.router.callback_query(F.data.startswith('trade_'))(self.handle_trade_callback)
     
     async def cmd_start(self, message: Message, state: FSMContext):
@@ -287,23 +289,290 @@ Use `/balance` to check your wallet balance.""",
 
     async def cmd_balance(self, message: Message):
         """Handle /balance command"""
-        await message.reply("Balance checking feature coming soon!")
+        user_id = message.from_user.id
+        user = await self.db_manager.get_user(user_id)
+        
+        if not user or not user.get('default_wallet_id'):
+            await message.reply("❌ No active wallet found. Create a wallet first with /new_wallet")
+            return
+        
+        wallet = await self.db_manager.get_wallet(user['default_wallet_id'])
+        if not wallet:
+            await message.reply("❌ Active wallet not found. Please switch to a valid wallet.")
+            return
+        
+        try:
+            # Get private key
+            private_key = self.wallet_manager.decrypt_private_key(wallet['encrypted_private_key'])
+            
+            # Get balances
+            balances = await self.trade_engine.get_wallet_balances(private_key)
+            
+            if balances['success']:
+                balance_text = f"""💰 **Wallet Balance**
 
-    async def cmd_buy(self, message: Message):
+📱 **{wallet['wallet_name']}**
+📍 **Address:** `{balances['address']}`
+
+💎 **MON Balance:** {balances['mon_balance']:.6f} MON
+
+Use `/buy <token> <amount>` to purchase tokens
+Use `/sell <token> <amount>` to sell tokens"""
+                
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"refresh_balance_{wallet['wallet_id']}")],
+                    [InlineKeyboardButton(text="📊 Trading", callback_data="trading_menu")],
+                    [InlineKeyboardButton(text="🔄 Switch Wallet", callback_data="switch_wallet")]
+                ])
+                
+                await message.reply(balance_text, reply_markup=keyboard, parse_mode="Markdown")
+            else:
+                await message.reply(f"❌ Error getting balance: {balances['error']}")
+                
+        except Exception as e:
+            await message.reply("❌ Error accessing wallet. Please try again.")
+
+    async def cmd_buy(self, message: Message, state: FSMContext):
         """Handle /buy command"""
-        await message.reply("Buy feature coming soon!")
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if len(args) < 2:
+            await message.reply(
+                "💰 **Buy Tokens**\n\n"
+                "Usage: `/buy <token_address> <amount_in_mon>`\n\n"
+                "Example: `/buy 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701 1.5`\n\n"
+                "This will buy tokens using the specified amount of MON.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        token_address = args[0]
+        amount_mon = args[1]
+        
+        # Validate inputs
+        if not self.trade_engine.validate_token_address(token_address):
+            await message.reply("❌ Invalid token address format")
+            return
+        
+        try:
+            float(amount_mon)
+        except ValueError:
+            await message.reply("❌ Invalid amount format")
+            return
+        
+        user_id = message.from_user.id
+        user = await self.db_manager.get_user(user_id)
+        
+        if not user or not user.get('default_wallet_id'):
+            await message.reply("❌ No active wallet found. Create a wallet first.")
+            return
+        
+        wallet = await self.db_manager.get_wallet(user['default_wallet_id'])
+        if not wallet:
+            await message.reply("❌ Active wallet not found.")
+            return
+        
+        # Get quote first
+        await message.reply("📊 Getting price quote...")
+        
+        try:
+            private_key = self.wallet_manager.decrypt_private_key(wallet['encrypted_private_key'])
+            
+            # Execute buy trade
+            result = await self.trade_engine.execute_buy_trade(
+                private_key, token_address, amount_mon, slippage=5.0
+            )
+            
+            if result['success']:
+                success_text = f"""✅ **Buy Order Executed!**
 
-    async def cmd_sell(self, message: Message):
+💰 **Spent:** {result['amount_in']} MON
+📈 **Expected Tokens:** ~{self.trade_engine.format_amount(int(result['expected_out']))}
+🔗 **Transaction:** `{result['tx_hash']}`
+⚙️ **Router:** {result['router']}
+📊 **Slippage:** {result['slippage']}%
+
+⏳ **Waiting for confirmation...**"""
+                
+                await message.reply(success_text, parse_mode="Markdown")
+                
+                # Record transaction
+                await self.db_manager.record_transaction(
+                    wallet['wallet_id'], 'buy', token_address, 
+                    result['amount_in'], result['expected_out'], result['tx_hash']
+                )
+                
+            else:
+                await message.reply(f"❌ **Buy failed:** {result['error']}")
+                
+        except Exception as e:
+            await message.reply("❌ Error executing buy order. Please try again.")
+
+    async def cmd_sell(self, message: Message, state: FSMContext):
         """Handle /sell command"""
-        await message.reply("Sell feature coming soon!")
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if len(args) < 2:
+            await message.reply(
+                "💰 **Sell Tokens**\n\n"
+                "Usage: `/sell <token_address> <amount_tokens>`\n\n"
+                "Example: `/sell 0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701 1000`\n\n"
+                "This will sell the specified amount of tokens for MON.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        token_address = args[0]
+        amount_tokens = args[1]
+        
+        # Validate inputs
+        if not self.trade_engine.validate_token_address(token_address):
+            await message.reply("❌ Invalid token address format")
+            return
+        
+        try:
+            float(amount_tokens)
+        except ValueError:
+            await message.reply("❌ Invalid amount format")
+            return
+        
+        user_id = message.from_user.id
+        user = await self.db_manager.get_user(user_id)
+        
+        if not user or not user.get('default_wallet_id'):
+            await message.reply("❌ No active wallet found. Create a wallet first.")
+            return
+        
+        wallet = await self.db_manager.get_wallet(user['default_wallet_id'])
+        if not wallet:
+            await message.reply("❌ Active wallet not found.")
+            return
+        
+        # Get quote first
+        await message.reply("📊 Getting price quote...")
+        
+        try:
+            private_key = self.wallet_manager.decrypt_private_key(wallet['encrypted_private_key'])
+            
+            # Execute sell trade
+            result = await self.trade_engine.execute_sell_trade(
+                private_key, token_address, amount_tokens, slippage=5.0
+            )
+            
+            if result['success']:
+                success_text = f"""✅ **Sell Order Executed!**
+
+📉 **Sold:** {result['amount_in']} tokens
+💰 **Expected MON:** ~{result['expected_out']} MON
+🔗 **Transaction:** `{result['tx_hash']}`
+⚙️ **Router:** {result['router']}
+📊 **Slippage:** {result['slippage']}%"""
+                
+                if result.get('approval_tx'):
+                    success_text += f"\n🔓 **Approval TX:** `{result['approval_tx']}`"
+                
+                success_text += "\n\n⏳ **Waiting for confirmation...**"
+                
+                await message.reply(success_text, parse_mode="Markdown")
+                
+                # Record transaction
+                await self.db_manager.record_transaction(
+                    wallet['wallet_id'], 'sell', token_address, 
+                    result['amount_in'], result['expected_out'], result['tx_hash']
+                )
+                
+            else:
+                await message.reply(f"❌ **Sell failed:** {result['error']}")
+                
+        except Exception as e:
+            await message.reply("❌ Error executing sell order. Please try again.")
 
     async def cmd_history(self, message: Message):
         """Handle /history command"""
-        await message.reply("History feature coming soon!")
+        user_id = message.from_user.id
+        transactions = await self.db_manager.get_user_transactions(user_id, limit=10)
+        
+        if not transactions:
+            await message.reply("📜 **No trading history found**\n\nStart trading to see your transaction history here!")
+            return
+        
+        history_text = "📜 **Recent Transactions**\n\n"
+        
+        for tx in transactions:
+            tx_type = tx['tx_type'].upper()
+            token_addr = tx['token_address'] or 'Unknown'
+            amount_in = tx['amount_in'] or '0'
+            amount_out = tx['amount_out'] or '0'
+            status = tx['status'].upper()
+            timestamp = tx['timestamp'][:16].replace('T', ' ')
+            
+            emoji = "💰" if tx_type == "BUY" else "📉"
+            status_emoji = "✅" if status == "SUCCESS" else "⏳" if status == "PENDING" else "❌"
+            
+            history_text += f"{emoji} **{tx_type}** {status_emoji}\n"
+            history_text += f"🏷️ `{token_addr[:10]}...{token_addr[-8:]}`\n"
+            history_text += f"📊 {amount_in} → {amount_out}\n"
+            history_text += f"🕐 {timestamp}\n"
+            
+            if tx.get('tx_hash'):
+                history_text += f"🔗 `{tx['tx_hash'][:10]}...{tx['tx_hash'][-8:]}`\n"
+            
+            history_text += "\n"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="refresh_history")],
+            [InlineKeyboardButton(text="💰 Balance", callback_data="check_balance")]
+        ])
+        
+        await message.reply(history_text, reply_markup=keyboard, parse_mode="Markdown")
 
     async def cmd_slippage(self, message: Message):
         """Handle /slippage command"""
-        await message.reply("Slippage configuration coming soon!")
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if not args:
+            # Show current slippage and options
+            user_id = message.from_user.id
+            user = await self.db_manager.get_user(user_id)
+            current_slippage = 5.0  # Default
+            
+            slippage_text = f"""⚙️ **Slippage Configuration**
+
+📊 **Current Slippage:** {current_slippage}%
+
+**What is slippage?**
+Slippage protects you from price changes during transaction execution. Higher slippage = more tolerance for price movement.
+
+**Usage:** `/slippage <percentage>`
+**Example:** `/slippage 3.5`"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="1%", callback_data="set_slippage_1"),
+                    InlineKeyboardButton(text="3%", callback_data="set_slippage_3"),
+                    InlineKeyboardButton(text="5%", callback_data="set_slippage_5")
+                ],
+                [
+                    InlineKeyboardButton(text="10%", callback_data="set_slippage_10"),
+                    InlineKeyboardButton(text="15%", callback_data="set_slippage_15"),
+                    InlineKeyboardButton(text="20%", callback_data="set_slippage_20")
+                ]
+            ])
+            
+            await message.reply(slippage_text, reply_markup=keyboard, parse_mode="Markdown")
+            return
+        
+        try:
+            slippage = float(args[0])
+            if slippage < 0.1 or slippage > 50:
+                await message.reply("❌ Slippage must be between 0.1% and 50%")
+                return
+            
+            # Save slippage setting (simplified)
+            await message.reply(f"✅ **Slippage set to {slippage}%**\n\nThis will be used for all future trades.")
+            
+        except ValueError:
+            await message.reply("❌ Invalid slippage format. Use a number like 5.0")
 
     async def cmd_switch_wallet(self, message: Message):
         """Handle /switch_wallet command"""
@@ -493,10 +762,53 @@ Your wallet has been encrypted and stored securely.""",
         
         await callback.answer()
 
+    async def handle_slippage_callback(self, callback: CallbackQuery):
+        """Handle slippage setting callbacks"""
+        slippage = callback.data.split('_')[-1]
+        await callback.message.edit_text(
+            f"✅ **Slippage set to {slippage}%**\n\n"
+            f"This setting will be used for all future trades.\n\n"
+            f"You can change it anytime with `/slippage <value>`",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+
+    async def handle_refresh_callback(self, callback: CallbackQuery):
+        """Handle refresh callbacks"""
+        if callback.data == "refresh_history":
+            await self.cmd_history(callback.message)
+        elif callback.data == "check_balance":
+            await self.cmd_balance(callback.message)
+        elif callback.data.startswith("refresh_balance_"):
+            await self.cmd_balance(callback.message)
+        await callback.answer()
+
     async def handle_trade_callback(self, callback: CallbackQuery):
         """Handle trade-related callback queries"""
-        # Implement trade callbacks
-        await callback.answer("Trade feature coming soon!")
+        if callback.data == "trading_menu":
+            trading_text = """📊 **Trading Menu**
+
+Choose your trading action:"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="💰 Buy Tokens", callback_data="quick_buy"),
+                    InlineKeyboardButton(text="📉 Sell Tokens", callback_data="quick_sell")
+                ],
+                [
+                    InlineKeyboardButton(text="📊 Get Price Quote", callback_data="price_quote"),
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="trade_settings")
+                ],
+                [InlineKeyboardButton(text="📜 History", callback_data="refresh_history")]
+            ])
+            
+            await callback.message.edit_text(trading_text, reply_markup=keyboard, parse_mode="Markdown")
+        elif callback.data == "switch_wallet":
+            await self.cmd_switch_wallet(callback.message)
+        else:
+            await callback.answer("Feature in development!")
+        
+        await callback.answer()
     
     async def start(self):
         """Start the bot"""

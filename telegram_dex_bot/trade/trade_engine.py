@@ -10,7 +10,7 @@ from web3 import Web3
 from eth_account import Account
 
 # Import Nad.fun SDK
-from nadfun_sdk import Trade, Token
+from nadfun_sdk import Trade, Token, BuyParams, SellParams, calculate_slippage, parseMon
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +30,18 @@ class TradeEngine:
     async def get_token_price(self, token_address: str, amount_in: int = 10**18, is_buy: bool = True) -> Dict[str, Any]:
         """Get token price quote from Nad.fun"""
         try:
-            # Get amount out for the given input
-            amount_out = await Trade.get_amount_out(
-                token=token_address,
-                amount_in=amount_in,
-                is_buy=is_buy
-            )
+            # Create trade instance with dummy private key for quotes
+            dummy_private_key = "0x" + "1" * 64
+            trade = Trade(self.rpc_url, dummy_private_key)
+            
+            # Get quote
+            quote = await trade.get_amount_out(token_address, amount_in, is_buy=is_buy)
             
             return {
                 'token_address': token_address,
                 'amount_in': str(amount_in),
-                'amount_out': str(amount_out),
+                'amount_out': str(quote.amount),
+                'router': quote.router,
                 'is_buy': is_buy,
                 'success': True
             }
@@ -52,31 +53,43 @@ class TradeEngine:
                 'error': str(e)
             }
     
-    async def execute_buy_trade(self, account: Account, token_address: str, 
-                               amount_in: int, slippage: float = 5.0) -> Dict[str, Any]:
+    async def execute_buy_trade(self, private_key: str, token_address: str, 
+                               amount_in_mon: str, slippage: float = 5.0) -> Dict[str, Any]:
         """Execute a buy trade"""
         try:
-            # Get expected amount out
-            quote = await self.get_token_price(token_address, amount_in, is_buy=True)
-            if not quote['success']:
-                return quote
+            # Initialize trade with user's private key
+            trade = Trade(self.rpc_url, private_key)
             
-            expected_out = int(quote['amount_out'])
-            min_amount_out = int(expected_out * (100 - slippage) / 100)
+            # Parse MON amount
+            amount_in = parseMon(amount_in_mon)
             
-            # Execute trade
-            result = await Trade.buy(
+            # Get quote
+            quote = await trade.get_amount_out(token_address, amount_in, is_buy=True)
+            
+            # Calculate minimum tokens with slippage
+            min_tokens = calculate_slippage(quote.amount, slippage)
+            
+            # Create buy parameters
+            buy_params = BuyParams(
                 token=token_address,
                 amount_in=amount_in,
-                min_amount_out=min_amount_out,
-                account=account
+                amount_out_min=min_tokens,
+                to=trade.address,
+                deadline=None,
+                nonce=None,
+                gas=None,
+                gas_price=None,
             )
             
+            # Execute buy
+            tx_hash = await trade.buy(buy_params, quote.router)
+            
             return {
-                'tx_hash': result.tx_hash if hasattr(result, 'tx_hash') else None,
-                'amount_in': str(amount_in),
-                'expected_out': str(expected_out),
-                'min_amount_out': str(min_amount_out),
+                'tx_hash': f"0x{tx_hash}",
+                'amount_in': amount_in_mon,
+                'expected_out': str(quote.amount),
+                'min_amount_out': str(min_tokens),
+                'router': quote.router,
                 'slippage': slippage,
                 'success': True,
                 'trade_type': 'buy'
@@ -90,31 +103,65 @@ class TradeEngine:
                 'trade_type': 'buy'
             }
     
-    async def execute_sell_trade(self, account: Account, token_address: str, 
-                                amount_in: int, slippage: float = 5.0) -> Dict[str, Any]:
+    async def execute_sell_trade(self, private_key: str, token_address: str, 
+                                amount_tokens: str, slippage: float = 5.0) -> Dict[str, Any]:
         """Execute a sell trade"""
         try:
-            # Get expected amount out
-            quote = await self.get_token_price(token_address, amount_in, is_buy=False)
-            if not quote['success']:
-                return quote
+            # Initialize trade and token with user's private key
+            trade = Trade(self.rpc_url, private_key)
+            token = Token(self.rpc_url, private_key)
             
-            expected_out = int(quote['amount_out'])
-            min_amount_out = int(expected_out * (100 - slippage) / 100)
+            # Parse token amount
+            amount_to_sell = parseMon(amount_tokens)
             
-            # Execute trade
-            result = await Trade.sell(
-                token=token_address,
-                amount_in=amount_in,
-                min_amount_out=min_amount_out,
-                account=account
+            # Check token balance
+            balance = await token.get_balance(token_address)
+            if balance == 0:
+                return {
+                    'success': False,
+                    'error': 'No tokens to sell',
+                    'trade_type': 'sell'
+                }
+            
+            # Get quote
+            quote = await trade.get_amount_out(token_address, amount_to_sell, is_buy=False)
+            
+            # Calculate minimum MON with slippage
+            min_mon = calculate_slippage(quote.amount, slippage)
+            
+            # Check and approve if needed
+            approval_tx = await token.check_and_approve(
+                token_address,
+                quote.router,
+                amount_to_sell
             )
             
+            if approval_tx:
+                # Wait for approval
+                await token.wait_for_transaction(approval_tx)
+            
+            # Create sell parameters
+            sell_params = SellParams(
+                token=token_address,
+                amount_in=amount_to_sell,
+                amount_out_min=min_mon,
+                to=trade.address,
+                deadline=None,
+                nonce=None,
+                gas=None,
+                gas_price=None,
+            )
+            
+            # Execute sell
+            tx_hash = await trade.sell(sell_params, quote.router)
+            
             return {
-                'tx_hash': result.tx_hash if hasattr(result, 'tx_hash') else None,
-                'amount_in': str(amount_in),
-                'expected_out': str(expected_out),
-                'min_amount_out': str(min_amount_out),
+                'tx_hash': f"0x{tx_hash}",
+                'amount_in': amount_tokens,
+                'expected_out': str(quote.amount),
+                'min_amount_out': str(min_mon),
+                'router': quote.router,
+                'approval_tx': approval_tx,
                 'slippage': slippage,
                 'success': True,
                 'trade_type': 'sell'
@@ -128,22 +175,59 @@ class TradeEngine:
                 'trade_type': 'sell'
             }
     
-    async def get_token_info(self, token_address: str) -> Dict[str, Any]:
-        """Get token information"""
+    async def get_wallet_balances(self, private_key: str, token_addresses: list = None) -> Dict[str, Any]:
+        """Get wallet balances for MON and tokens"""
         try:
-            # Get token details using Nad.fun SDK
-            token_info = await Token.get_token_info(token_address)
+            # Initialize token with user's private key
+            token = Token(self.rpc_url, private_key)
+            account = Account.from_key(private_key)
+            
+            # Get MON balance
+            mon_balance_wei = self.web3.eth.get_balance(account.address)
+            mon_balance = self.web3.from_wei(mon_balance_wei, 'ether')
+            
+            balances = {
+                'address': account.address,
+                'mon_balance': float(mon_balance),
+                'tokens': {},
+                'success': True
+            }
+            
+            # Get token balances if addresses provided
+            if token_addresses:
+                for token_addr in token_addresses:
+                    try:
+                        token_balance = await token.get_balance(token_addr)
+                        balances['tokens'][token_addr] = str(token_balance)
+                    except Exception as e:
+                        logger.error(f"Failed to get balance for token {token_addr}: {e}")
+                        balances['tokens'][token_addr] = '0'
+            
+            return balances
+            
+        except Exception as e:
+            logger.error(f"Failed to get wallet balances: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    async def wait_for_transaction(self, private_key: str, tx_hash: str, timeout: int = 60) -> Dict[str, Any]:
+        """Wait for transaction confirmation"""
+        try:
+            trade = Trade(self.rpc_url, private_key)
+            receipt = await trade.wait_for_transaction(tx_hash, timeout=timeout)
             
             return {
-                'address': token_address,
-                'name': token_info.get('name', 'Unknown'),
-                'symbol': token_info.get('symbol', 'UNKNOWN'),
-                'decimals': token_info.get('decimals', 18),
+                'tx_hash': tx_hash,
+                'status': receipt.get('status', 0),
+                'gas_used': receipt.get('gasUsed', 0),
+                'block_number': receipt.get('blockNumber', 0),
                 'success': True
             }
             
         except Exception as e:
-            logger.error(f"Failed to get token info for {token_address}: {e}")
+            logger.error(f"Failed to wait for transaction {tx_hash}: {e}")
             return {
                 'success': False,
                 'error': str(e)
