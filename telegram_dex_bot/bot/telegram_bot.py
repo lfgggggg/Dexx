@@ -131,7 +131,12 @@ Type `/help` for detailed commands."""
 • `/wallet` - View and manage wallets
 • `/new_wallet` - Create a new wallet
 • `/import` - Import wallet from private key
+• `/switch_wallet` - Switch between wallets
 • `/balance` - Check wallet balance
+
+**Security:**
+• `/view_keys` - View private keys (password protected)
+• `/change_password` - Change your password
 
 **Trading:**
 • `/buy <token> <amount>` - Buy tokens
@@ -149,9 +154,10 @@ Type `/help` for detailed commands."""
 • `/slippage 3.0`
 
 **Security Notes:**
-🔐 Private keys are encrypted locally
-🔐 Never share your private keys with anyone
-🔐 Always verify contract addresses before trading
+🔐 Create multiple wallets (no limit)
+🔐 Switch between wallets easily
+🔐 Password protect private key viewing
+🔐 All keys encrypted and stored securely
 
 Need help? Just type your question!"""
         
